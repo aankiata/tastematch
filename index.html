@@ -1133,7 +1133,145 @@ const RESTAURANTS = [{
     rating: 4.2,
     health: true
   }]
+}, {
+  id: 'r19',
+  name: 'Tandoor Junction',
+  cuisine: 'North Indian',
+  location: 'Exhibition Road',
+  rating: 4.6,
+  reviews: 1890,
+  priceLevel: 2,
+  avgPrice: 340,
+  deliveryTime: 26,
+  distanceKm: 2.2,
+  veg: 'veg-friendly',
+  moods: ['comforting', 'indulgent'],
+  ambience: ['family', 'celebration'],
+  previouslyOrdered: false,
+  dishes: [{
+    name: 'Paneer Lababdar',
+    price: 260,
+    veg: true,
+    spice: 2,
+    rating: 4.7,
+    health: false
+  }, {
+    name: 'Tandoori Roti (3pc)',
+    price: 60,
+    veg: true,
+    spice: 0,
+    rating: 4.4,
+    health: true
+  }, {
+    name: 'Chicken Seekh Kebab',
+    price: 280,
+    veg: false,
+    spice: 2,
+    rating: 4.6,
+    health: false
+  }]
+}, {
+  id: 'r20',
+  name: 'Little Saigon',
+  cuisine: 'Thai',
+  location: 'Kankarbagh',
+  rating: 4.0,
+  reviews: 320,
+  priceLevel: 2,
+  avgPrice: 350,
+  deliveryTime: 31,
+  distanceKm: 3.1,
+  veg: 'veg-friendly',
+  moods: ['spicy', 'healthy'],
+  ambience: ['weeknight'],
+  previouslyOrdered: false,
+  dishes: [{
+    name: 'Vegetable Spring Rolls',
+    price: 150,
+    veg: true,
+    spice: 0,
+    rating: 4.2,
+    health: true
+  }, {
+    name: 'Basil Chicken Stir-fry',
+    price: 260,
+    veg: false,
+    spice: 3,
+    rating: 4.4,
+    health: true
+  }, {
+    name: 'Red Curry (Veg)',
+    price: 240,
+    veg: true,
+    spice: 3,
+    rating: 4.1,
+    health: true
+  }]
 }];
+
+/* ============================================================
+   REVIEW INTELLIGENCE — deterministically derived from structured
+   restaurant attributes (rating, reviews, price, delivery, dishes).
+   Simulates "unstructured reviews → AI summary → decision support"
+   without needing hundreds of fabricated reviews.
+   ============================================================ */
+function getReviewIntelligence(restaurant) {
+  const loves = [];
+  const complaints = [];
+  if (restaurant.rating >= 4.4) loves.push('Consistently great quality');
+  if (restaurant.rating >= 4.5) loves.push('Rich, authentic flavours');
+  if (restaurant.reviews >= 1000) loves.push('Reliable, well-reviewed by regulars');
+  if (restaurant.deliveryTime <= 25) loves.push('Fast delivery');
+  if (restaurant.veg === 'veg-only') loves.push('Excellent for strict vegetarians');else if (restaurant.veg === 'veg-friendly') loves.push('Good vegetarian options alongside non-veg');
+  if (restaurant.dishes.some(d => d.health)) loves.push('Solid lighter/healthier choices');
+  if (loves.length < 3) loves.push('Generous portions');
+  if (restaurant.deliveryTime >= 32) complaints.push('Delivery can run slow during peak hours');
+  if (restaurant.priceLevel === 3) complaints.push('On the pricier side for everyday orders');
+  if (restaurant.dishes.some(d => d.spice >= 3)) complaints.push('Some dishes run quite spicy — ask for mild if unsure');
+  if (restaurant.reviews < 500) complaints.push('Fewer reviews than more established spots nearby');
+  if (complaints.length === 0) complaints.push('Packaging could be sturdier for gravies');
+  const mentioned = restaurant.dishes.slice().sort((a, b) => b.rating - a.rating).slice(0, 2).map(d => d.name);
+  return {
+    loves: loves.slice(0, 3),
+    complaints: complaints.slice(0, 2),
+    mentioned
+  };
+}
+
+/* ============================================================
+   "WHY NOW" CONTEXT LAYER — mock contextual signals (time of day,
+   weekday/weekend). No real GPS/weather/live data is used.
+   ============================================================ */
+function getDiningContext(date = new Date()) {
+  const hour = date.getHours();
+  const day = date.getDay(); // 0 Sun .. 6 Sat
+  const isWeekend = day === 0 || day === 6;
+  let mealType = 'snack';
+  let label = 'Good anytime pick';
+  if (hour >= 6 && hour < 11) {
+    mealType = 'breakfast';
+    label = 'Great start to the day';
+  } else if (hour >= 11 && hour < 15) {
+    mealType = 'lunch';
+    label = 'Quick lunch option';
+  } else if (hour >= 15 && hour < 19) {
+    mealType = 'snack';
+    label = 'Perfect for an evening snack';
+  } else if (hour >= 19 && hour < 23) {
+    mealType = 'dinner';
+    label = 'Perfect for tonight';
+  } else {
+    mealType = 'late-night';
+    label = 'Good late-night pick';
+  }
+  if (isWeekend) label += ' — great for the weekend';
+  return {
+    mealType,
+    isWeekend,
+    label,
+    hour
+  };
+}
 
 /* ============================================================
    USER PROFILE (mock personalization state)
@@ -1157,8 +1295,13 @@ const INITIAL_PROFILE = {
 
 /* ============================================================
    INTENT PARSER — parseUserIntent()
-   Lightweight keyword/regex NLU. This is the seam where a real
-   LLM call would replace local heuristics.
+   Lightweight keyword/regex NLU covering cuisine, dish, diet,
+   spice, mood, budget (min/max), delivery time, distance, party
+   size, occasion/meal type, novelty, exclusions, rating preference
+   and quantity. This is the seam where a real LLM call would
+   replace local heuristics — swap this function out, keep its
+   output shape, and nothing downstream needs to change.
+   // Replace mock intent parser with production LLM/API here.
    ============================================================ */
 function parseUserIntent(rawText) {
   const text = (rawText || '').toLowerCase();
@@ -1170,10 +1313,20 @@ function parseUserIntent(rawText) {
     spice: null,
     moods: [],
     budget: null,
+    // hard max per-person budget
+    budgetMin: null,
+    // soft "at least this premium" signal
     deliveryMax: null,
+    // hard max delivery minutes
+    distanceMax: null,
     partySize: 1,
+    occasion: null,
+    // 'celebration' | 'everyday' | 'date-night' | 'family'
+    mealType: null,
+    // 'breakfast' | 'lunch' | 'dinner' | 'snack'
     novelty: null,
-    // 'new' | 'usual'
+    // 'new' | 'usual' | 'similar'
+    minRating: null,
     exclude: [],
     unclear: false
   };
@@ -1182,16 +1335,27 @@ function parseUserIntent(rawText) {
   if (/\bveg(etarian)?\b/.test(text) && !/non[\s-]?veg/.test(text)) intent.vegetarian = true;
   if (/non[\s-]?veg|chicken|mutton|meat|egg\b/.test(text)) intent.vegetarian = intent.vegetarian === true ? intent.vegetarian : false;
 
-  // budget: "under ₹500", "under 500", "budget is 1000", "₹400"
-  const budgetMatch = text.match(/(?:under|below|less than|budget(?: is| of)?)\s*(?:₹|rs\.?\s*)?(\d{2,5})/) || text.match(/₹\s*(\d{2,5})/);
+  // budget: "under ₹500", "under 500", "budget is 1000", "₹400", "cheap"
+  const budgetMatch = text.match(/(?:under|below|less than|budget(?: is| of)?|within)\s*(?:₹|rs\.?\s*)?(\d{2,5})/) || text.match(/₹\s*(\d{2,5})/);
   if (budgetMatch) intent.budget = parseInt(budgetMatch[1], 10);
+  if (/\bcheap(est)?\b|\bbudget[- ]friendly\b|\binexpensive\b/.test(text) && !intent.budget) intent.budget = 250;
+
+  // premium / minimum spend signal: "premium", "above ₹500", "at least ₹500"
+  const minMatch = text.match(/(?:above|over|at least|minimum(?: of)?)\s*(?:₹|rs\.?\s*)?(\d{2,5})/);
+  if (minMatch) intent.budgetMin = parseInt(minMatch[1], 10);
+  if (/premium|fancy|fine dining|five-course|5-course/.test(text)) intent.budgetMin = intent.budgetMin || 500;
 
   // delivery time: "within 30 minutes", "30 min"
   const timeMatch = text.match(/(\d{1,3})\s*(?:min|mins|minutes)/);
   if (timeMatch) intent.deliveryMax = parseInt(timeMatch[1], 10);
   if (/\bquick(ly)?\b|\bfast\b|\basap\b/.test(text) && !intent.deliveryMax) intent.deliveryMax = 25;
 
-  // party size: "for two", "for 5 people", "dinner for 2"
+  // distance: "near me", "within 2km"
+  const distMatch = text.match(/within\s*(\d{1,2})\s*km/);
+  if (distMatch) intent.distanceMax = parseInt(distMatch[1], 10);
+  if (/near me|nearby|close by/.test(text) && !intent.distanceMax) intent.distanceMax = 3;
+
+  // party size / quantity: "for two", "for 5 people", "dinner for 2"
   const numWords = {
     one: 1,
     two: 2,
@@ -1206,9 +1370,17 @@ function parseUserIntent(rawText) {
   const partyWord = text.match(/for\s+(one|two|three|four|five|six|seven|eight)\b/);
   if (partyDigit) intent.partySize = parseInt(partyDigit[1], 10);else if (partyWord) intent.partySize = numWords[partyWord[1]];
 
-  // novelty
-  if (/haven'?t tried|something new|new restaurant|never tried|surprise|bored of my usual|change things up/.test(text)) intent.novelty = 'new';
-  if (/my usual|usual order|favou?rite|regular order/.test(text)) intent.novelty = 'usual';
+  // occasion / meal type
+  if (/breakfast/.test(text)) intent.mealType = 'breakfast';else if (/lunch/.test(text)) intent.mealType = 'lunch';else if (/dinner|tonight/.test(text)) intent.mealType = 'dinner';else if (/snack/.test(text)) intent.mealType = 'snack';
+  if (/celebrat|birthday|anniversary/.test(text)) intent.occasion = 'celebration';else if (/date night|romantic/.test(text)) intent.occasion = 'date-night';else if (/family|kids/.test(text)) intent.occasion = 'family';
+
+  // rating preference
+  const ratingMatch = text.match(/(\d(?:\.\d)?)\s*\+?\s*star/);
+  if (ratingMatch) intent.minRating = parseFloat(ratingMatch[1]);
+  if (/highly rated|top rated|best rated/.test(text)) intent.minRating = intent.minRating || 4.3;
+
+  // novelty — order matters: "don't want my usual" beats "usual" alone
+  if (/don'?t want (my )?usual|not (my )?usual|different from (my )?usual|bored of my usual|change things up/.test(text)) intent.novelty = 'new';else if (/like what i usually eat|similar to my usual|something like my usual/.test(text)) intent.novelty = 'similar';else if (/haven'?t tried|something new|new restaurant|never tried|surprise/.test(text)) intent.novelty = 'new';else if (/my usual|usual order|favou?rite|regular order/.test(text)) intent.novelty = 'usual';
 
   // spice
   if (/spicy|fiery|hot\b/.test(text)) intent.spice = 'spicy';
@@ -1216,7 +1388,7 @@ function parseUserIntent(rawText) {
 
   // moods
   const moodMap = {
-    comforting: /comfort(ing)?|cosy|cozy|homely/,
+    comforting: /comfort(ing)?|cosy|cozy|homely|exhausted|tired|long day/,
     indulgent: /indulgent|treat|decadent|cheat day/,
     healthy: /healthy|light\b(?! delivery)|clean eating|not (too )?oily|not too heavy/,
     premium: /premium|fancy|special occasion|celebration/
@@ -1259,7 +1431,7 @@ function parseUserIntent(rawText) {
   }
 
   // detect "unclear" requests
-  const hasAnySignal = intent.cuisine || intent.dish || intent.vegetarian !== null || intent.spice || intent.moods.length || intent.budget || intent.deliveryMax || intent.novelty;
+  const hasAnySignal = intent.cuisine || intent.dish || intent.vegetarian !== null || intent.spice || intent.moods.length || intent.budget || intent.budgetMin || intent.deliveryMax || intent.novelty || intent.mealType || intent.occasion;
   if (!hasAnySignal && text.trim().length > 0) intent.unclear = true;
   if (/not sure what i want|don'?t know what i want|no idea/.test(text)) intent.unclear = true;
   if (/don'?t care about cuisine/.test(text)) {
@@ -1271,55 +1443,98 @@ function intentToChips(intent) {
   const chips = [];
   if (intent.vegetarian === true) chips.push({
     key: 'veg',
-    label: 'Vegetarian'
+    label: 'Vegetarian',
+    hard: true
   });
   if (intent.vegetarian === false) chips.push({
     key: 'nonveg',
-    label: 'Non-vegetarian'
+    label: 'Non-vegetarian',
+    hard: true
   });
   if (intent.budget) chips.push({
     key: 'budget',
-    label: `Under ₹${intent.budget}`
+    label: `Under ₹${intent.budget}`,
+    hard: true
+  });
+  if (intent.budgetMin) chips.push({
+    key: 'budgetMin',
+    label: `₹${intent.budgetMin}+ premium`,
+    hard: false
   });
   if (intent.deliveryMax) chips.push({
     key: 'delivery',
-    label: `≤ ${intent.deliveryMax} min`
+    label: `≤ ${intent.deliveryMax} min`,
+    hard: true
+  });
+  if (intent.distanceMax) chips.push({
+    key: 'distance',
+    label: `Within ${intent.distanceMax} km`,
+    hard: false
   });
   intent.moods.forEach(m => chips.push({
     key: 'mood-' + m,
-    label: m[0].toUpperCase() + m.slice(1)
+    label: m[0].toUpperCase() + m.slice(1),
+    hard: false
   }));
   if (intent.spice === 'spicy') chips.push({
     key: 'spice',
-    label: 'Spicy'
+    label: 'Spicy',
+    hard: false
   });
   if (intent.spice === 'mild') chips.push({
     key: 'spice',
-    label: 'Mild / not oily'
+    label: 'Mild / not oily',
+    hard: false
   });
   if (intent.cuisine) chips.push({
     key: 'cuisine',
-    label: intent.cuisine
+    label: intent.cuisine,
+    hard: false
   });
   if (intent.dish) chips.push({
     key: 'dish',
-    label: intent.dish[0].toUpperCase() + intent.dish.slice(1)
+    label: intent.dish[0].toUpperCase() + intent.dish.slice(1),
+    hard: false
+  });
+  if (intent.mealType) chips.push({
+    key: 'mealType',
+    label: intent.mealType[0].toUpperCase() + intent.mealType.slice(1),
+    hard: false
+  });
+  if (intent.occasion) chips.push({
+    key: 'occasion',
+    label: intent.occasion.replace('-', ' '),
+    hard: false
+  });
+  if (intent.minRating) chips.push({
+    key: 'minRating',
+    label: `${intent.minRating}★ and above`,
+    hard: false
   });
   if (intent.novelty === 'new') chips.push({
     key: 'novelty',
-    label: 'Try something new'
+    label: 'Try something new',
+    hard: false
   });
   if (intent.novelty === 'usual') chips.push({
     key: 'novelty',
-    label: 'Stick to my usual'
+    label: 'Stick to my usual',
+    hard: false
+  });
+  if (intent.novelty === 'similar') chips.push({
+    key: 'novelty',
+    label: 'Similar to my usual',
+    hard: false
   });
   if (intent.partySize > 1) chips.push({
     key: 'party',
-    label: `For ${intent.partySize} people`
+    label: `For ${intent.partySize} people`,
+    hard: false
   });
   intent.exclude.forEach(e => chips.push({
     key: 'exclude-' + e,
-    label: `No ${e}`
+    label: `No ${e}`,
+    hard: true
   }));
   return chips;
 }
@@ -1339,12 +1554,19 @@ const SCORE_WEIGHTS = {
   personalPref: 0.05,
   novelty: 0.05
 };
-function bestDishCombo(restaurant, intent, partySize) {
+
+// Constraints that get EXCLUDED (not just down-ranked) when violated.
+// Soft preferences (mood, cuisine, novelty, rating) only reduce score.
+const HARD_CONSTRAINTS = ['diet', 'budget', 'delivery', 'excluded'];
+function bestDishCombo(restaurant, intent, partySize, profile) {
   let pool = restaurant.dishes.slice();
   if (intent.vegetarian === true) pool = pool.filter(d => d.veg);
-  if (intent.moods.includes('healthy')) pool.sort((a, b) => b.health - a.health || b.rating - a.rating);else pool.sort((a, b) => b.rating - a.rating);
-  if (intent.spice === 'spicy') pool.sort((a, b) => b.spice - a.spice || b.rating - a.rating);
-  if (intent.spice === 'mild') pool.sort((a, b) => a.spice - b.spice || b.rating - a.rating);
+  const wantsSpicy = intent.spice === 'spicy' || profile && profile.spiceBias >= 1;
+  const wantsMild = intent.spice === 'mild' || profile && profile.spiceBias <= -1;
+  const wantsHealthy = intent.moods.includes('healthy') || profile && profile.healthBias >= 1;
+  if (wantsHealthy) pool.sort((a, b) => b.health - a.health || b.rating - a.rating);else pool.sort((a, b) => b.rating - a.rating);
+  if (wantsSpicy) pool.sort((a, b) => b.spice - a.spice || b.rating - a.rating);
+  if (wantsMild) pool.sort((a, b) => a.spice - b.spice || b.rating - a.rating);
   if (pool.length === 0) pool = restaurant.dishes.slice();
   const targetBudget = intent.budget ? intent.budget * Math.max(1, Math.min(partySize, 2)) : null;
   const combo = [];
@@ -1365,8 +1587,25 @@ function bestDishCombo(restaurant, intent, partySize) {
     total
   };
 }
+
+/**
+ * Checks HARD constraints only: dietary requirement, max budget, max
+ * delivery time, explicit exclusions. Soft preferences (mood, cuisine
+ * fit, novelty, rating) never appear here — they only shape the score.
+ */
+function checkHardConstraints(restaurant, intent, comboTotal, partySize) {
+  const violations = [];
+  if (intent.vegetarian === true && restaurant.veg === 'non-veg') violations.push('diet');
+  if (intent.budget) {
+    const target = intent.budget * Math.max(1, Math.min(partySize, 2));
+    if (comboTotal > target) violations.push('budget');
+  }
+  if (intent.deliveryMax && restaurant.deliveryTime > intent.deliveryMax) violations.push('delivery');
+  if (intent.exclude.includes(restaurant.cuisine)) violations.push('excluded');
+  return violations;
+}
 function scoreRestaurant(restaurant, intent, profile) {
-  // -- intent match (cuisine, mood, dish, diet alignment) --
+  // -- intent match (cuisine, mood, dish, diet alignment — all SOFT) --
   let intentMatch = 0.3; // baseline
   if (intent.cuisine) intentMatch = restaurant.cuisine === intent.cuisine ? 1 : 0.15;
   if (intent.dish) {
@@ -1377,37 +1616,44 @@ function scoreRestaurant(restaurant, intent, profile) {
     const overlap = intent.moods.filter(m => restaurant.moods.includes(m)).length;
     intentMatch = Math.max(intentMatch * 0.6, overlap / intent.moods.length * 0.9 + intentMatch * 0.1);
   }
+  if (intent.occasion && restaurant.ambience.includes(intent.occasion)) intentMatch = Math.min(1, intentMatch + 0.1);
   if (intent.vegetarian === true) {
     if (restaurant.veg === 'veg-only') intentMatch = Math.min(1, intentMatch + 0.15);else if (restaurant.veg === 'non-veg') intentMatch *= 0.2;
   }
+  if (intent.minRating && restaurant.rating < intent.minRating) intentMatch *= 0.5;
   intentMatch = Math.max(0, Math.min(1, intentMatch));
 
   // -- dish match: is there a genuinely good dish for this request --
   const {
     combo,
     total
-  } = bestDishCombo(restaurant, intent, intent.partySize);
+  } = bestDishCombo(restaurant, intent, intent.partySize, profile);
   let dishMatch = combo.reduce((s, d) => s + d.rating, 0) / (combo.length * 5);
-  if (intent.spice === 'spicy') dishMatch *= combo.some(d => d.spice >= 2) ? 1 : 0.7;
-  if (intent.moods.includes('healthy')) dishMatch *= combo.some(d => d.health) ? 1.05 : 0.75;
+  const wantsSpicy = intent.spice === 'spicy' || profile.spiceBias >= 1;
+  const wantsHealthy = intent.moods.includes('healthy') || profile.healthBias >= 1;
+  if (wantsSpicy) dishMatch *= combo.some(d => d.spice >= 2) ? 1 : 0.7;
+  if (wantsHealthy) dishMatch *= combo.some(d => d.health) ? 1.05 : 0.75;
   dishMatch = Math.max(0, Math.min(1, dishMatch));
 
-  // -- budget match --
+  // -- budget match (SOFT scoring on top of the HARD cutoff applied later) --
   let budgetMatch = 0.7;
   if (intent.budget) {
     const target = intent.budget * Math.max(1, Math.min(intent.partySize, 2));
     if (total <= target) budgetMatch = 1 - Math.max(0, (target - total) / target) * 0.15;else budgetMatch = Math.max(0, 1 - (total - target) / target);
   } else {
-    budgetMatch = restaurant.avgPrice <= profile.typicalBudgetMax + 150 ? 0.85 : 0.6;
+    const budgetLean = profile.budgetBias >= 1 ? restaurant.priceLevel >= 2 : profile.budgetBias <= -1 ? restaurant.priceLevel <= 2 : true;
+    budgetMatch = restaurant.avgPrice <= profile.typicalBudgetMax + 150 || budgetLean ? 0.85 : 0.6;
   }
+  if (intent.budgetMin && restaurant.avgPrice < intent.budgetMin) budgetMatch *= 0.6;
 
-  // -- delivery match --
+  // -- delivery match (SOFT scoring on top of the HARD cutoff applied later) --
   let deliveryMatch = 0.75;
   if (intent.deliveryMax) {
     deliveryMatch = restaurant.deliveryTime <= intent.deliveryMax ? 1 : Math.max(0, 1 - (restaurant.deliveryTime - intent.deliveryMax) / 20);
   } else {
     deliveryMatch = Math.max(0.4, 1 - restaurant.deliveryTime / 60);
   }
+  if (intent.distanceMax) deliveryMatch = restaurant.distanceKm <= intent.distanceMax ? Math.min(1, deliveryMatch + 0.1) : deliveryMatch * 0.7;
 
   // -- rating / review quality --
   const ratingQuality = Math.min(1, restaurant.rating / 5 * (Math.min(restaurant.reviews, 2000) / 2000 * 0.3 + 0.7));
@@ -1418,14 +1664,18 @@ function scoreRestaurant(restaurant, intent, profile) {
   if (restaurant.dishes.some(d => profile.frequentlyOrdered.some(f => d.name.toLowerCase().includes(f.toLowerCase().split(' ')[0])))) personalPref += 0.2;
   personalPref = Math.min(1, personalPref);
 
-  // -- novelty / discovery --
+  // -- novelty / discovery (also drives "similar to my usual") --
   let novelty = restaurant.previouslyOrdered ? 0.2 : 0.75;
   if (intent.novelty === 'new') novelty = restaurant.previouslyOrdered ? 0.1 : 1;
   if (intent.novelty === 'usual') novelty = restaurant.previouslyOrdered ? 1 : 0.25;
+  if (intent.novelty === 'similar') {
+    const similar = profile.favoriteCuisines.includes(restaurant.cuisine) && !restaurant.previouslyOrdered;
+    novelty = similar ? 0.95 : restaurant.previouslyOrdered ? 0.5 : 0.3;
+  }
   novelty = Math.max(0, Math.min(1, novelty + profile.noveltyBias * 0.05));
-  const excluded = intent.exclude.includes(restaurant.cuisine);
+  const violations = checkHardConstraints(restaurant, intent, total, intent.partySize);
   const raw = intentMatch * SCORE_WEIGHTS.intentMatch + dishMatch * SCORE_WEIGHTS.dishMatch + budgetMatch * SCORE_WEIGHTS.budgetMatch + deliveryMatch * SCORE_WEIGHTS.deliveryMatch + ratingQuality * SCORE_WEIGHTS.ratingQuality + personalPref * SCORE_WEIGHTS.personalPref + novelty * SCORE_WEIGHTS.novelty;
-  const score = excluded ? 0 : Math.round(raw * 100);
+  const score = Math.round(raw * 100);
   return {
     score,
     breakdown: {
@@ -1438,10 +1688,11 @@ function scoreRestaurant(restaurant, intent, profile) {
       novelty
     },
     combo,
-    comboTotal: total
+    comboTotal: total,
+    violations
   };
 }
-function generateRecommendationReason(restaurant, intent, scored, profile) {
+function generateRecommendationReason(restaurant, intent, scored, profile, context) {
   const reasons = [];
   const {
     combo,
@@ -1457,41 +1708,85 @@ function generateRecommendationReason(restaurant, intent, scored, profile) {
     const matched = intent.moods.filter(m => restaurant.moods.includes(m));
     if (matched.length) reasons.push(`Matches your "${matched[0]}" mood`);
   }
+  if (intent.novelty === 'similar' && profile.favoriteCuisines.includes(restaurant.cuisine)) {
+    reasons.push(`${restaurant.cuisine} is close to what you usually order, without repeating a restaurant`);
+  }
   if (!restaurant.previouslyOrdered && (intent.novelty === 'new' || !intent.novelty)) reasons.push("You haven't ordered here before");
   if (restaurant.previouslyOrdered && intent.novelty === 'usual') reasons.push('One of your regular favourites');
   if (breakdown.ratingQuality > 0.8) reasons.push(`Highly rated: ${restaurant.rating}★ across ${restaurant.reviews.toLocaleString('en-IN')} reviews`);
   const topDish = combo.slice().sort((a, b) => b.rating - a.rating)[0];
   if (topDish) reasons.push(`${topDish.name} is a standout here (${topDish.rating}★)`);
   if (profile.favoriteCuisines.includes(restaurant.cuisine)) reasons.push(`${restaurant.cuisine} is one of your favourite cuisines`);
+  if (profile.spiceBias >= 1 && combo.some(d => d.spice >= 2)) reasons.push('Spicier than usual, based on your recent feedback');
+  if (profile.healthBias >= 1 && combo.some(d => d.health)) reasons.push('Leans healthier, matching what you asked us to remember');
+  if (context && restaurant.ambience.includes(context.isWeekend ? 'family' : 'comfort')) reasons.push(context.label);
   // de-dupe & cap
   return Array.from(new Set(reasons)).slice(0, 6);
 }
+
+/**
+ * Two-pass ranking:
+ *  1) Strict pass — only restaurants with zero HARD-constraint violations.
+ *  2) If that's empty, progressively relax constraints (delivery → budget →
+ *     diet) until at least one restaurant qualifies, and report which
+ *     constraint had to give — this powers the "closest options" fallback.
+ */
 function runRecommendation(intent, profile, restaurants = RESTAURANTS) {
-  const scored = restaurants.map(r => ({
+  const allScored = restaurants.map(r => ({
     restaurant: r,
     ...scoreRestaurant(r, intent, profile)
-  })).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
-  if (scored.length === 0) return {
+  })).sort((a, b) => b.score - a.score);
+  const strictPool = allScored.filter(s => s.violations.length === 0);
+  let pool = strictPool;
+  let fallbackUsed = false;
+  let limitingConstraint = null;
+  const relaxOrder = ['delivery', 'budget', 'diet', 'excluded'];
+  if (pool.length === 0) {
+    fallbackUsed = true;
+    const relaxed = new Set();
+    for (const constraint of relaxOrder) {
+      relaxed.add(constraint);
+      const candidate = allScored.filter(s => s.violations.every(v => relaxed.has(v)));
+      if (candidate.length > 0) {
+        pool = candidate;
+        limitingConstraint = constraint;
+        break;
+      }
+    }
+    if (pool.length === 0) pool = allScored.slice(0, 3); // absolute fallback
+  }
+  pool = pool.slice().sort((a, b) => b.score - a.score);
+  if (pool.length === 0) return {
     bestMatch: null,
     bestValue: null,
     bestDiscovery: null,
-    all: []
+    all: [],
+    fallbackUsed: false,
+    limitingConstraint: null
   };
-  const bestMatch = scored[0];
-  const valueScored = scored.map(s => ({
+  const bestMatch = pool[0];
+  const valueScored = pool.map(s => ({
     ...s,
     valueScore: s.score / (s.restaurant.avgPrice / 100)
   })).sort((a, b) => b.valueScore - a.valueScore);
   const bestValue = valueScored.find(s => s.restaurant.id !== bestMatch.restaurant.id) || valueScored[0];
-  const discoveryPool = scored.filter(s => !s.restaurant.previouslyOrdered);
-  const bestDiscovery = discoveryPool.find(s => s.restaurant.id !== bestMatch.restaurant.id && s.restaurant.id !== bestValue.restaurant.id) || discoveryPool[0] || scored.find(s => s.restaurant.id !== bestMatch.restaurant.id) || scored[0];
+  const discoveryPool = pool.filter(s => !s.restaurant.previouslyOrdered);
+  const bestDiscovery = discoveryPool.find(s => s.restaurant.id !== bestMatch.restaurant.id && s.restaurant.id !== bestValue.restaurant.id) || discoveryPool[0] || pool.find(s => s.restaurant.id !== bestMatch.restaurant.id) || pool[0];
   return {
     bestMatch,
     bestValue,
     bestDiscovery,
-    all: scored
+    all: pool,
+    fallbackUsed,
+    limitingConstraint
   };
 }
+const CONSTRAINT_LABELS = {
+  delivery: 'delivery-time window',
+  budget: 'budget',
+  diet: 'vegetarian requirement',
+  excluded: 'excluded cuisine'
+};
 function surpriseMeIntent(profile, baseIntent) {
   const usualCuisines = new Set(profile.favoriteCuisines);
   const candidates = Object.keys(CUISINE_META).filter(c => !usualCuisines.has(c));
@@ -1528,6 +1823,27 @@ function updatePreferences(profile, tag) {
   return {
     profile: next,
     message: messages[tag] || 'Preference saved.'
+  };
+}
+
+/**
+ * "My Usual" mode: surfaces the user's actual recently-ordered
+ * restaurants directly (not re-ranked), plus a single "one small
+ * change" nudge — a highly-rated dish at a familiar restaurant that
+ * isn't their default order.
+ */
+function getMyUsualRecommendation(profile) {
+  const usualRestaurants = RESTAURANTS.filter(r => profile.recentlyOrderedIds.includes(r.id));
+  if (usualRestaurants.length === 0) return null;
+  const anchor = usualRestaurants[0];
+  const sortedDishes = anchor.dishes.slice().sort((a, b) => b.rating - a.rating);
+  const usualDish = sortedDishes[sortedDishes.length - 1] || sortedDishes[0];
+  const suggestion = sortedDishes.find(d => d.name !== usualDish.name) || sortedDishes[0];
+  return {
+    restaurants: usualRestaurants,
+    anchor,
+    usualDish,
+    suggestion
   };
 }
 
@@ -1645,7 +1961,7 @@ function GhostButton({
    PROCESSING STATE
    ============================================================ */
 function ProcessingState() {
-  const steps = ['Understanding your craving…', 'Checking restaurants…', 'Matching dishes…', 'Finding your best options…'];
+  const steps = ['Understanding your craving…', 'Extracting your preferences…', 'Matching restaurants…', 'Finding the best dishes…', 'Optimising your options…'];
   const [i, setI] = useState(0);
   useEffect(() => {
     if (i >= steps.length - 1) return;
@@ -1753,8 +2069,10 @@ function RecommendationCard({
   scored,
   intent,
   profile,
+  context,
   onOrder,
-  onViewed
+  onViewed,
+  onViewDetails
 }) {
   const seen = useRef(false);
   useEffect(() => {
@@ -1768,9 +2086,10 @@ function RecommendationCard({
     restaurant,
     score,
     combo,
-    comboTotal
+    comboTotal,
+    violations
   } = scored;
-  const reasons = generateRecommendationReason(restaurant, intent, scored, profile);
+  const reasons = generateRecommendationReason(restaurant, intent, scored, profile, context);
   const meta = MODE_META[modeKey];
   return /*#__PURE__*/React.createElement("div", {
     className: "card-hover rise-in flex h-full flex-col rounded-2xl border border-line bg-white p-5"
@@ -1781,8 +2100,11 @@ function RecommendationCard({
   }, /*#__PURE__*/React.createElement("span", null, meta.icon), meta.label), /*#__PURE__*/React.createElement(ScoreRing, {
     score: score,
     size: 48
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-3"
+  })), violations && violations.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
+  }, "Closest option — ", CONSTRAINT_LABELS[violations[0]] || 'one preference', " couldn't be fully met."), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onViewDetails(restaurant),
+    className: "flex gap-3 rounded-lg text-left transition-opacity hover:opacity-80"
   }, /*#__PURE__*/React.createElement(CuisineArt, {
     cuisine: restaurant.cuisine,
     className: "flex h-16 w-16 shrink-0 items-center justify-center rounded-xl"
@@ -1827,7 +2149,118 @@ function RecommendationCard({
   }, /*#__PURE__*/React.createElement(PrimaryButton, {
     className: "flex-1 !py-2.5 text-sm",
     onClick: () => onOrder(restaurant, combo, comboTotal, modeKey)
-  }, "Order this")));
+  }, "Order this"), /*#__PURE__*/React.createElement(GhostButton, {
+    className: "!py-2.5 !px-3.5 text-sm",
+    onClick: () => onViewDetails(restaurant),
+    "aria-label": `View details for ${restaurant.name}`
+  }, "Details")));
+}
+
+/* ============================================================
+   RESTAURANT DETAIL — dish intelligence + review intelligence
+   ============================================================ */
+function dishSuitability(dish, intent) {
+  let score = dish.rating / 5;
+  if (intent) {
+    if (intent.vegetarian === true && !dish.veg) score *= 0.3;
+    if (intent.spice === 'spicy') score *= dish.spice >= 2 ? 1.08 : 0.85;
+    if (intent.spice === 'mild') score *= dish.spice <= 1 ? 1.08 : 0.8;
+    if (intent.moods && intent.moods.includes('healthy')) score *= dish.health ? 1.1 : 0.85;
+  }
+  return Math.max(0, Math.min(100, Math.round(score * 100)));
+}
+function suitabilityCaption(score) {
+  if (score >= 85) return 'Excellent match for your current craving.';
+  if (score >= 70) return 'Good fit for what you asked for.';
+  return 'Also worth trying.';
+}
+const SPICE_LABELS = ['No spice', 'Mild', 'Medium', 'Spicy'];
+function RestaurantDetail({
+  restaurant,
+  intent,
+  onClose,
+  onOrder
+}) {
+  if (!restaurant) return null;
+  const review = getReviewIntelligence(restaurant);
+  const dishes = restaurant.dishes.slice().sort((a, b) => dishSuitability(b, intent) - dishSuitability(a, intent));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-0 backdrop-blur-sm sm:items-center sm:p-4",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-white p-6 shadow-2xl rise-in sm:rounded-3xl",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mb-4 flex items-start justify-between"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-3"
+  }, /*#__PURE__*/React.createElement(CuisineArt, {
+    cuisine: restaurant.cuisine,
+    className: "flex h-14 w-14 shrink-0 items-center justify-center rounded-xl"
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    className: "font-display text-xl font-semibold text-ink"
+  }, restaurant.name), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-ink/55"
+  }, restaurant.cuisine, " · ", restaurant.location), /*#__PURE__*/React.createElement("p", {
+    className: "mt-0.5 text-sm text-ink/70"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-medium text-ink"
+  }, restaurant.rating, "★"), " (", restaurant.reviews.toLocaleString('en-IN'), ") · ", restaurant.deliveryTime, " min · ", restaurant.distanceKm, " km"))), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    "aria-label": "Close details",
+    className: "rounded-full p-1.5 text-ink/40 hover:bg-fog hover:text-ink"
+  }, "✕")), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-semibold uppercase tracking-wide text-ink/40"
+  }, "Dish intelligence"), /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 space-y-2"
+  }, dishes.map((d, idx) => {
+    const s = dishSuitability(d, intent);
+    return /*#__PURE__*/React.createElement("div", {
+      key: idx,
+      className: "rounded-xl border border-line p-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-start justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "truncate font-medium text-ink"
+    }, d.name), /*#__PURE__*/React.createElement("p", {
+      className: "mt-0.5 text-xs text-ink/55"
+    }, d.rating, "★ · ₹", d.price, " · ", d.veg ? 'Vegetarian' : 'Non-vegetarian', " · ", SPICE_LABELS[d.spice], d.health ? ' · Health-friendly' : '')), /*#__PURE__*/React.createElement("span", {
+      className: `shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${s >= 85 ? 'bg-green-50 text-moss' : s >= 70 ? 'bg-red-50 text-zreddark' : 'bg-fog text-ink/50'}`
+    }, s, "% fit")), /*#__PURE__*/React.createElement("p", {
+      className: "mt-1.5 text-xs text-ink/60"
+    }, suitabilityCaption(s)));
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "mt-5 text-xs font-semibold uppercase tracking-wide text-ink/40"
+  }, "What customers say"), /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-xl border border-line p-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-semibold text-moss"
+  }, "Customers love"), /*#__PURE__*/React.createElement("ul", {
+    className: "mt-1.5 space-y-1"
+  }, review.loves.map((l, idx) => /*#__PURE__*/React.createElement("li", {
+    key: idx,
+    className: "text-sm text-ink/75"
+  }, "✓ ", l)))), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-xl border border-line p-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-semibold text-gold"
+  }, "Common complaints"), /*#__PURE__*/React.createElement("ul", {
+    className: "mt-1.5 space-y-1"
+  }, review.complaints.map((l, idx) => /*#__PURE__*/React.createElement("li", {
+    key: idx,
+    className: "text-sm text-ink/75"
+  }, "△ ", l))))), /*#__PURE__*/React.createElement("p", {
+    className: "mt-3 text-xs text-ink/50"
+  }, "Most-mentioned dishes: ", review.mentioned.join(', ')), /*#__PURE__*/React.createElement("p", {
+    className: "mt-1 text-[11px] text-ink/35"
+  }, "Demo review intelligence — derived from mock structured data, not live reviews."), onOrder && /*#__PURE__*/React.createElement(PrimaryButton, {
+    className: "mt-5 w-full",
+    onClick: () => onOrder(restaurant, [dishes[0]], dishes[0].price)
+  }, "Order top pick — ", dishes[0].name)));
 }
 
 /* ============================================================
@@ -2010,6 +2443,18 @@ function FeedbackPanel({
 /* ============================================================
    METRICS PANEL (demo / dev only)
    ============================================================ */
+function computeTimeToDecision() {
+  const searches = analyticsLog.filter(a => a.event === 'ai_search_started');
+  const completions = analyticsLog.filter(a => a.event === 'order_completed');
+  if (searches.length === 0 || completions.length === 0) return null;
+  const deltas = [];
+  completions.forEach(c => {
+    const priorSearch = searches.filter(s => s.ts <= c.ts).sort((a, b) => b.ts - a.ts)[0];
+    if (priorSearch) deltas.push((c.ts - priorSearch.ts) / 1000);
+  });
+  if (deltas.length === 0) return null;
+  return Math.round(deltas.reduce((a, b) => a + b, 0) / deltas.length);
+}
 function MetricsPanel({
   onClose
 }) {
@@ -2021,12 +2466,26 @@ function MetricsPanel({
   const count = ev => analyticsLog.filter(a => a.event === ev).length;
   const viewed = count('recommendation_viewed');
   const clicked = count('recommendation_clicked');
-  const started = count('order_started');
+  const searched = count('ai_search_started');
   const completed = count('order_completed');
   const liked = count('recommendation_liked');
   const disliked = count('recommendation_disliked');
   const pct = (a, b) => b > 0 ? Math.round(a / b * 100) : 0;
-  const rows = [['AI recommendation → order conversion', `${pct(completed, Math.max(viewed, 1))}%`], ['Recommendation acceptance rate', `${pct(clicked, Math.max(viewed, 1))}%`], ['Average time to decision', '38 sec'], ['Repeat usage (7-day, mock)', '62%'], ['Average order value', completed ? `₹${Math.round(420 + completed * 11)}` : '₹420'], ['New restaurant discovery rate', '34%'], ['Recommendation satisfaction', `${pct(liked, Math.max(liked + disliked, 1)) || 88}%`]];
+  const timeToDecision = computeTimeToDecision();
+  const headline = [{
+    label: 'Time to decision',
+    val: timeToDecision ? `${timeToDecision}s (this session)` : '38s (typical)',
+    note: 'Craving → selected meal'
+  }, {
+    label: 'Recommendation acceptance rate',
+    val: `${pct(clicked, Math.max(viewed, 1)) || 71}%`,
+    note: 'How often a shown pick gets chosen'
+  }, {
+    label: 'Repeat TasteMatch usage',
+    val: '62% (7-day, mock)',
+    note: 'Whether AI discovery becomes a habit'
+  }];
+  const rows = [['AI recommendation → order conversion', `${pct(completed, Math.max(viewed, 1))}%`], ['Average order value', completed ? `₹${Math.round(420 + completed * 11)}` : '₹420'], ['New restaurant discovery rate', '34%'], ['Recommendation satisfaction', `${pct(liked, Math.max(liked + disliked, 1)) || 88}%`], ['AI searches this session', `${searched}`]];
   return /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 backdrop-blur-sm",
     onClick: onClose
@@ -2039,10 +2498,23 @@ function MetricsPanel({
     className: "font-display text-lg font-semibold text-ink"
   }, "Product Metrics"), /*#__PURE__*/React.createElement("p", {
     className: "text-sm text-ink/50"
-  }, "Demo metrics — illustrative, not live data.")), /*#__PURE__*/React.createElement("button", {
+  }, "Demo metrics — illustrative, not live Zomato data.")), /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     className: "rounded-full p-1.5 text-ink/40 hover:bg-fog hover:text-ink"
-  }, "✕")), /*#__PURE__*/React.createElement("div", {
+  }, "✕")), /*#__PURE__*/React.createElement("p", {
+    className: "mt-4 text-xs font-semibold uppercase tracking-wide text-ink/40"
+  }, "The three that matter most"), /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3"
+  }, headline.map(h => /*#__PURE__*/React.createElement("div", {
+    key: h.label,
+    className: "rounded-xl border border-zred/20 bg-red-50/50 p-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "font-display text-xl font-semibold text-zreddark"
+  }, h.val), /*#__PURE__*/React.createElement("p", {
+    className: "mt-0.5 text-xs font-medium text-ink/70"
+  }, h.label), /*#__PURE__*/React.createElement("p", {
+    className: "mt-0.5 text-[11px] text-ink/45"
+  }, h.note)))), /*#__PURE__*/React.createElement("div", {
     className: "mt-5 divide-y divide-line"
   }, rows.map(([label, val]) => /*#__PURE__*/React.createElement("div", {
     key: label,
@@ -2061,12 +2533,166 @@ function MetricsPanel({
 }
 
 /* ============================================================
+   COMPARISON MODAL — compare the three recommendation modes
+   ============================================================ */
+function ComparisonModal({
+  results,
+  intent,
+  profile,
+  onClose
+}) {
+  if (!results) return null;
+  const rows = [{
+    key: 'best',
+    scored: results.bestMatch
+  }, {
+    key: 'value',
+    scored: results.bestValue
+  }, {
+    key: 'discovery',
+    scored: results.bestDiscovery
+  }].filter(r => r.scored);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 backdrop-blur-sm",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl rise-in",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mb-4 flex items-start justify-between"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-display text-lg font-semibold text-ink"
+  }, "Compare your top matches"), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "rounded-full p-1.5 text-ink/40 hover:bg-fog hover:text-ink"
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "hidden overflow-x-auto sm:block"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full border-collapse text-sm"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    className: "border-b border-line text-left text-xs uppercase tracking-wide text-ink/40"
+  }, /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Restaurant"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Score"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Price"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Delivery"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Rating"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2"
+  }, "Why it matches"))), /*#__PURE__*/React.createElement("tbody", null, rows.map(({
+    key,
+    scored
+  }) => /*#__PURE__*/React.createElement("tr", {
+    key: key,
+    className: "border-b border-line align-top"
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "py-3 pr-3 font-medium text-ink"
+  }, scored.restaurant.name, /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+    className: "font-normal text-ink/45"
+  }, MODE_META[key].label)), /*#__PURE__*/React.createElement("td", {
+    className: "py-3 pr-3 font-display font-semibold text-zreddark"
+  }, scored.score, "%"), /*#__PURE__*/React.createElement("td", {
+    className: "py-3 pr-3"
+  }, "₹", scored.comboTotal), /*#__PURE__*/React.createElement("td", {
+    className: "py-3 pr-3"
+  }, scored.restaurant.deliveryTime, " min"), /*#__PURE__*/React.createElement("td", {
+    className: "py-3 pr-3"
+  }, scored.restaurant.rating, "★"), /*#__PURE__*/React.createElement("td", {
+    className: "py-3 text-ink/65"
+  }, generateRecommendationReason(scored.restaurant, intent, scored, profile).slice(0, 2).join('; '))))))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3 sm:hidden"
+  }, rows.map(({
+    key,
+    scored
+  }) => /*#__PURE__*/React.createElement("div", {
+    key: key,
+    className: "rounded-xl border border-line p-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "font-medium text-ink"
+  }, scored.restaurant.name), /*#__PURE__*/React.createElement("span", {
+    className: "font-display font-semibold text-zreddark"
+  }, scored.score, "%")), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-ink/45"
+  }, MODE_META[key].label), /*#__PURE__*/React.createElement("p", {
+    className: "mt-2 text-sm text-ink/70"
+  }, "₹", scored.comboTotal, " · ", scored.restaurant.deliveryTime, " min · ", scored.restaurant.rating, "★"), /*#__PURE__*/React.createElement("p", {
+    className: "mt-1 text-xs text-ink/55"
+  }, generateRecommendationReason(scored.restaurant, intent, scored, profile).slice(0, 2).join('; ')))))));
+}
+
+/* ============================================================
+   "MY USUAL" — familiar restaurants + one small nudge
+   ============================================================ */
+function MyUsualSection({
+  usual,
+  onOrder,
+  onViewDetails
+}) {
+  if (!usual) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl border border-line bg-white p-5 rise-in"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "font-display text-lg font-semibold text-ink"
+  }, "❤️ Your usual"), /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 grid gap-3 sm:grid-cols-2"
+  }, usual.restaurants.map(r => /*#__PURE__*/React.createElement("button", {
+    key: r.id,
+    onClick: () => onViewDetails(r),
+    className: "card-hover flex items-center gap-3 rounded-xl border border-line p-3 text-left"
+  }, /*#__PURE__*/React.createElement(CuisineArt, {
+    cuisine: r.cuisine,
+    className: "flex h-12 w-12 shrink-0 items-center justify-center rounded-lg"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "min-w-0"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "truncate font-medium text-ink"
+  }, r.name), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-ink/50"
+  }, r.cuisine, " · ", r.rating, "★ · ", r.deliveryTime, " min"))))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 rounded-xl bg-red-50/50 p-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-semibold text-zreddark"
+  }, "One small change"), /*#__PURE__*/React.createElement("p", {
+    className: "mt-1 text-sm text-ink/70"
+  }, "You usually order ", usual.usualDish.name, " from ", usual.anchor.name, ". Want to try the highly-rated ", usual.suggestion.name, " (", usual.suggestion.rating, "★) instead?"), /*#__PURE__*/React.createElement(PrimaryButton, {
+    className: "mt-3 !py-2 text-sm",
+    onClick: () => onOrder(usual.anchor, [usual.suggestion], usual.suggestion.price, 'usual')
+  }, "Try ", usual.suggestion.name)));
+}
+
+/* ============================================================
+   LEARNING LOOP STRIP — compact visual of the product loop
+   ============================================================ */
+function LearningLoopStrip() {
+  const steps = ['Intent', 'Recommendation', 'Order', 'Feedback', 'Preference', 'Better picks'];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "mt-10 rounded-2xl border border-dashed border-line bg-white/60 p-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-semibold uppercase tracking-wide text-ink/40"
+  }, "TasteMatch learns from every choice"), /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 flex flex-wrap items-center gap-1.5"
+  }, steps.map((s, idx) => /*#__PURE__*/React.createElement(React.Fragment, {
+    key: s
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "rounded-full bg-fog px-3 py-1.5 text-xs font-medium text-ink/70"
+  }, s), idx < steps.length - 1 && /*#__PURE__*/React.createElement("span", {
+    className: "text-ink/25"
+  }, "→")))));
+}
+
+/* ============================================================
    MAIN APP
    ============================================================ */
 const SUGGESTION_CHIPS = [{
   emoji: '🍕',
-  label: 'Something indulgent',
-  query: 'I want something indulgent and comforting tonight'
+  label: 'Comfort food',
+  query: 'I want something comforting tonight'
 }, {
   emoji: '🥗',
   label: 'Something healthy',
@@ -2085,14 +2711,14 @@ const SUGGESTION_CHIPS = [{
   query: "Give me something I haven't tried before"
 }, {
   emoji: '❤️',
-  label: 'My usual favourites',
+  label: 'My usual',
   query: 'Give me my usual order'
 }, {
   emoji: '🎲',
   label: 'Surprise me',
   query: '__surprise__'
 }];
-const DEMO_PROMPTS = ['Comforting vegetarian dinner under ₹500', 'Something spicy for two under ₹800', 'Healthy dinner within 30 minutes', '__surprise__', 'Best biryani near me'];
+const DEMO_PROMPTS = ["I'm exhausted after work. Give me something comforting, vegetarian, under ₹600, within 30 minutes, and I don't want my usual food.", 'Comforting vegetarian dinner under ₹500', 'Something spicy for two under ₹800', 'Healthy dinner within 30 minutes', '__surprise__', 'Best biryani near me'];
 function App() {
   const [query, setQuery] = useState('');
   const [phase, setPhase] = useState('home'); // home | clarify | processing | results
@@ -2103,8 +2729,11 @@ function App() {
   const [confirmation, setConfirmation] = useState(null);
   const [feedback, setFeedback] = useState(null); // { reaction, savedMessage }
   const [showMetrics, setShowMetrics] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
+  const [detailRestaurant, setDetailRestaurant] = useState(null);
   const [surpriseNote, setSurpriseNote] = useState(null);
   const resultsRef = useRef(null);
+  const context = useMemo(() => getDiningContext(), []);
   const runSearch = useCallback((text, opts = {}) => {
     track('ai_search_started', {
       text
@@ -2136,7 +2765,7 @@ function App() {
       const res = runRecommendation(intent, profile);
       setResults(res);
       setPhase('results');
-    }, 1950);
+    }, 2350);
     return () => clearTimeout(t);
   }, [phase, intent]);
   useEffect(() => {
@@ -2156,7 +2785,7 @@ function App() {
     const next = {
       ...intent
     };
-    if (key === 'veg' || key === 'nonveg') next.vegetarian = null;else if (key === 'budget') next.budget = null;else if (key === 'delivery') next.deliveryMax = null;else if (key.startsWith('mood-')) next.moods = next.moods.filter(m => 'mood-' + m !== key);else if (key === 'spice') next.spice = null;else if (key === 'cuisine') next.cuisine = null;else if (key === 'dish') next.dish = null;else if (key === 'novelty') next.novelty = null;else if (key === 'party') next.partySize = 1;else if (key.startsWith('exclude-')) next.exclude = next.exclude.filter(x => 'exclude-' + x !== key);
+    if (key === 'veg' || key === 'nonveg') next.vegetarian = null;else if (key === 'budget') next.budget = null;else if (key === 'budgetMin') next.budgetMin = null;else if (key === 'delivery') next.deliveryMax = null;else if (key === 'distance') next.distanceMax = null;else if (key.startsWith('mood-')) next.moods = next.moods.filter(m => 'mood-' + m !== key);else if (key === 'spice') next.spice = null;else if (key === 'cuisine') next.cuisine = null;else if (key === 'dish') next.dish = null;else if (key === 'mealType') next.mealType = null;else if (key === 'occasion') next.occasion = null;else if (key === 'minRating') next.minRating = null;else if (key === 'novelty') next.novelty = null;else if (key === 'party') next.partySize = 1;else if (key.startsWith('exclude-')) next.exclude = next.exclude.filter(x => 'exclude-' + x !== key);
     setIntent(next);
     setResults(runRecommendation(next, profile));
   };
@@ -2177,6 +2806,7 @@ function App() {
     track('order_started', {
       restaurant: restaurant.name
     });
+    setDetailRestaurant(null);
   };
   const handlePlaceOrder = total => {
     track('order_completed', {
@@ -2221,9 +2851,11 @@ function App() {
     restaurant: restaurant.name,
     mode: modeKey
   });
+  const handleViewDetails = restaurant => setDetailRestaurant(restaurant);
   const chips = intent ? intentToChips(intent) : [];
   const recentSet = new Set(profile.recentlyOrderedIds);
   const recentNames = RESTAURANTS.filter(r => recentSet.has(r.id)).map(r => r.name);
+  const usual = intent && intent.novelty === 'usual' ? getMyUsualRecommendation(profile) : null;
   return /*#__PURE__*/React.createElement("div", {
     className: "min-h-screen bg-fog font-body text-ink"
   }, /*#__PURE__*/React.createElement("header", {
@@ -2316,9 +2948,13 @@ function App() {
     className: "mb-5 rounded-xl border border-line bg-white px-4 py-3 text-sm text-ink/70 rise-in"
   }, "🎲 ", surpriseNote), /*#__PURE__*/React.createElement("div", {
     className: "rounded-2xl border border-line bg-white p-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-start justify-between gap-2"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-sm font-medium text-ink/55"
-  }, "Here's what we understood"), /*#__PURE__*/React.createElement("div", {
+  }, "Here's what we understood"), /*#__PURE__*/React.createElement("span", {
+    className: "rounded-full bg-fog px-3 py-1 text-xs font-medium text-ink/50"
+  }, "🕐 ", context.label)), /*#__PURE__*/React.createElement("div", {
     className: "mt-3 flex flex-wrap gap-2"
   }, chips.length > 0 ? chips.map(c => /*#__PURE__*/React.createElement(Chip, {
     key: c.key,
@@ -2327,31 +2963,52 @@ function App() {
     onRemove: () => handleRemoveChip(c.key)
   })) : /*#__PURE__*/React.createElement("span", {
     className: "text-sm text-ink/40"
-  }, "No specific filters — showing our top overall picks."))), /*#__PURE__*/React.createElement("p", {
-    className: "mt-6 font-display text-xl font-semibold text-ink"
-  }, "Got it. We found ", results.all.length, " strong ", results.all.length === 1 ? 'match' : 'matches', "."), /*#__PURE__*/React.createElement("div", {
+  }, "No specific filters — showing our top overall picks."))), results.fallbackUsed && results.all.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 rise-in"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold"
+  }, "Closest options."), " Your ", CONSTRAINT_LABELS[results.limitingConstraint] || 'request', " was the limiting factor here — these are the nearest fits we could find."), usual && /*#__PURE__*/React.createElement("div", {
+    className: "mt-6"
+  }, /*#__PURE__*/React.createElement(MyUsualSection, {
+    usual: usual,
+    onOrder: handleOrder,
+    onViewDetails: handleViewDetails
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-6 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "font-display text-xl font-semibold text-ink"
+  }, "Got it. We found ", results.all.length, " strong ", results.all.length === 1 ? 'match' : 'matches', "."), results.bestMatch && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowCompare(true),
+    className: "text-sm font-medium text-zreddark hover:underline"
+  }, "Compare these")), /*#__PURE__*/React.createElement("div", {
     className: "mt-5 grid gap-5 md:grid-cols-3"
   }, results.bestMatch && /*#__PURE__*/React.createElement(RecommendationCard, {
     modeKey: "best",
     scored: results.bestMatch,
     intent: intent,
     profile: profile,
+    context: context,
     onOrder: handleOrder,
-    onViewed: handleViewed
+    onViewed: handleViewed,
+    onViewDetails: handleViewDetails
   }), results.bestValue && /*#__PURE__*/React.createElement(RecommendationCard, {
     modeKey: "value",
     scored: results.bestValue,
     intent: intent,
     profile: profile,
+    context: context,
     onOrder: handleOrder,
-    onViewed: handleViewed
+    onViewed: handleViewed,
+    onViewDetails: handleViewDetails
   }), results.bestDiscovery && /*#__PURE__*/React.createElement(RecommendationCard, {
     modeKey: "discovery",
     scored: results.bestDiscovery,
     intent: intent,
     profile: profile,
+    context: context,
     onOrder: handleOrder,
-    onViewed: handleViewed
+    onViewed: handleViewed,
+    onViewDetails: handleViewDetails
   })), results.all.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "mt-10 rounded-2xl border border-dashed border-line bg-white p-10 text-center"
   }, /*#__PURE__*/React.createElement("p", {
@@ -2364,7 +3021,17 @@ function App() {
     className: "text-sm font-semibold text-ink"
   }, "Your taste profile"), /*#__PURE__*/React.createElement("p", {
     className: "mt-1 text-sm text-ink/55"
-  }, "Favourites: ", profile.favoriteCuisines.join(', '), " · Usual budget ₹", profile.typicalBudgetMin, "–", profile.typicalBudgetMax, " · Recently ordered: ", recentNames.join(', ')))), order && /*#__PURE__*/React.createElement(OrderModal, {
+  }, "Favourites: ", profile.favoriteCuisines.join(', '), " · Usual budget ₹", profile.typicalBudgetMin, "–", profile.typicalBudgetMax, " · Recently ordered: ", recentNames.join(', '))), /*#__PURE__*/React.createElement(LearningLoopStrip, null)), detailRestaurant && /*#__PURE__*/React.createElement(RestaurantDetail, {
+    restaurant: detailRestaurant,
+    intent: intent,
+    onClose: () => setDetailRestaurant(null),
+    onOrder: handleOrder
+  }), showCompare && results && /*#__PURE__*/React.createElement(ComparisonModal, {
+    results: results,
+    intent: intent,
+    profile: profile,
+    onClose: () => setShowCompare(false)
+  }), order && /*#__PURE__*/React.createElement(OrderModal, {
     order: order,
     onClose: () => setOrder(null),
     onPlace: handlePlaceOrder
